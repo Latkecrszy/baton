@@ -1450,6 +1450,19 @@ class TestCmdSlotRemote:
 
         assert rc == 1
 
+    async def test_rejects_invalid_port_in_remote(self, project_dir: Path, monkeypatch):
+        from unittest.mock import AsyncMock
+        from baton import cli as cli_mod
+
+        self._setup_node(project_dir)
+        monkeypatch.setattr(cli_mod, "_control_post", AsyncMock())
+
+        rc = await cli_mod._cmd_slot_remote(
+            self._make_args(project_dir, "svc.cluster.local:9090", "baton.cluster.local:notaport")
+        )
+
+        assert rc == 1
+
 
 class TestCmdRouteSetRemote:
     """Tests for _cmd_route_set with --remote: new target formats and remote dispatch."""
@@ -1625,6 +1638,31 @@ class TestCmdRouteSetRemote:
         rc = await cli_mod._cmd_route_set(args)
 
         assert rc == 1
+
+    async def test_skips_mgr_up_when_circuit_already_running(self, project_dir: Path, monkeypatch):
+        """If the circuit owner is alive, the local path must not call mgr.up()."""
+        from unittest.mock import AsyncMock, MagicMock
+        from baton import cli as cli_mod
+        import baton.lifecycle as lifecycle_mod
+
+        self._setup_node(project_dir)
+
+        fake_state = MagicMock()
+        monkeypatch.setattr(cli_mod, "load_state", lambda d: fake_state)
+        monkeypatch.setattr(cli_mod, "_owner_alive", lambda s: True)
+
+        fake_mgr = MagicMock()
+        fake_mgr.up = AsyncMock()
+        fake_mgr.set_routing = MagicMock()
+        monkeypatch.setattr(lifecycle_mod, "LifecycleManager", lambda d: fake_mgr)
+
+        rc = await cli_mod._cmd_route_set(
+            self._make_args(project_dir, targets="a:127.0.0.1:9090:100", remote=None)
+        )
+
+        assert rc == 0
+        fake_mgr.up.assert_not_called()
+        fake_mgr.set_routing.assert_called_once()
 
 
 class TestMockHostFlag:
@@ -1841,6 +1879,18 @@ class TestMockHostFlag:
 
         fake_mock_server.start.assert_called_once_with(host="0.0.0.0")
 
+    def test_invalid_mock_host_rejected(self, project_dir: Path, monkeypatch):
+        captured = {}
+
+        async def fake_up(args):
+            captured["called"] = True
+            return 0
+
+        monkeypatch.setattr("baton.cli._cmd_up", fake_up)
+        rc = main(["up", "--dir", str(project_dir), "--mock-host", "notanip"])
+        assert rc == 1
+        assert "called" not in captured
+
 
 class TestLogLevelFlag:
     """Tests for --log-level argument and logging.basicConfig wiring."""
@@ -1938,6 +1988,17 @@ class TestLogLevelFlag:
         monkeypatch.setattr("baton.cli._cmd_status", fake_status)
         main(["--log-level", "DEBUG", "status", "--dir", str(project_dir)])
         assert captured["log_level"] == "DEBUG"
+
+    def test_invalid_log_level_rejected(self, project_dir, monkeypatch):
+        import pytest
+
+        async def fake_up(args):
+            return 0
+
+        monkeypatch.setattr("baton.cli._cmd_up", fake_up)
+        with pytest.raises(SystemExit) as exc_info:
+            main(["--log-level", "NONSENSE", "up", "--dir", str(project_dir)])
+        assert exc_info.value.code == 2
 
 
 class TestDevDependencies:

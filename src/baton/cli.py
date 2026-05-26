@@ -26,6 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--log-level",
         default=os.environ.get("LOG_LEVEL", "INFO"),
+        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
         help="Logging level (default: INFO, or $LOG_LEVEL)",
     )
     sub = parser.add_subparsers(dest="command")
@@ -430,6 +431,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
+    mock_host = getattr(args, "mock_host", None)
+    if mock_host is not None:
+        try:
+            socket.inet_aton(mock_host)
+        except OSError:
+            print(f"Error: invalid --mock-host '{mock_host}' (expected a valid IPv4 address)", file=sys.stderr)
+            return 1
+
     try:
         func = args.func
         if inspect.iscoroutinefunction(func):
@@ -787,6 +796,14 @@ async def _cmd_slot_attach(args: argparse.Namespace, state) -> int:
     return 0
 
 
+def _parse_remote(remote: str, node) -> tuple[str, int]:
+    """Return (host, mgmt_port) from a HOST[:PORT] string, falling back to node.management_port."""
+    if ":" in remote:
+        host, _, port_str = remote.rpartition(":")
+        return host, int(port_str)
+    return remote, node.management_port
+
+
 async def _cmd_slot_remote(args: argparse.Namespace) -> int:
     """POST /backend to a remote adapter's management port — no local process management."""
     circuit = load_circuit(args.dir)
@@ -809,17 +826,11 @@ async def _cmd_slot_remote(args: argparse.Namespace) -> int:
         print(f"Error: invalid port in target '{target}'", file=sys.stderr)
         return 1
 
-    remote = args.remote
-    if ":" in remote:
-        remote_host, _, remote_port_str = remote.rpartition(":")
-        try:
-            mgmt_port = int(remote_port_str)
-        except ValueError:
-            print(f"Error: invalid port in --remote '{remote}'", file=sys.stderr)
-            return 1
-    else:
-        remote_host = remote
-        mgmt_port = node.management_port
+    try:
+        remote_host, mgmt_port = _parse_remote(args.remote, node)
+    except ValueError:
+        print(f"Error: invalid port in --remote '{args.remote}'", file=sys.stderr)
+        return 1
 
     status, body = await _control_post(
         remote_host, mgmt_port, "/backend",
@@ -1085,16 +1096,11 @@ async def _cmd_route_set(args: argparse.Namespace) -> int:
         if node is None:
             print(f"Error: node '{args.node}' not found in circuit", file=sys.stderr)
             return 1
-        if ":" in remote:
-            remote_host, _, remote_port_str = remote.rpartition(":")
-            try:
-                mgmt_port = int(remote_port_str)
-            except ValueError:
-                print(f"Error: invalid port in --remote '{remote}'", file=sys.stderr)
-                return 1
-        else:
-            remote_host = remote
-            mgmt_port = node.management_port
+        try:
+            remote_host, mgmt_port = _parse_remote(remote, node)
+        except ValueError:
+            print(f"Error: invalid port in --remote '{remote}'", file=sys.stderr)
+            return 1
         status, body = await _control_post(
             remote_host, mgmt_port, "/routing",
             config.model_dump(),
@@ -1107,7 +1113,9 @@ async def _cmd_route_set(args: argparse.Namespace) -> int:
 
     from baton.lifecycle import LifecycleManager
     mgr = LifecycleManager(args.dir)
-    await mgr.up(mock=False)
+    existing = load_state(args.dir)
+    if existing is None or not _owner_alive(existing):
+        await mgr.up(mock=False)
     mgr.set_routing(args.node, config)
     print(f"Routing config set for '{args.node}' (strategy: {args.strategy})")
     return 0
