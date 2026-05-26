@@ -1,16 +1,8 @@
-# Canonical PyPI publish workflow.
-# PyPI Trusted Publishing (OIDC) — no PyPI API token, no ~/.pypirc.
-# One-time setup on pypi.org:
-#   Project -> Manage -> Publishing -> Add a new pending publisher
-#     Owner:        jmcentire
-#     Repository:   baton
-#     Workflow:     publish.yml
-#     Environment:  pypi
-#
-# Trigger: a published GitHub Release. Tag the commit, push the tag,
-# `gh release create <tag>` (or click "Publish release" in the UI).
+# Release build check.
+# Baton is not published to PyPI yet; this workflow intentionally builds the
+# package on release/manual dispatch without uploading it.
 
-name: Publish to PyPI
+name: Release Build Check
 
 on:
   workflow_dispatch:
@@ -18,11 +10,8 @@ on:
     types: [published]
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
     steps:
       - uses: actions/checkout@v6
 
@@ -32,9 +21,7 @@ jobs:
 
       - name: Verify release tag matches package version
         run: |
-          python -c "import os, pathlib, sys, tomllib; version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; tag = os.environ['GITHUB_REF_NAME']; expected = f'v{version}'; print(f'Publishing {expected}') if tag == expected else sys.exit(f'release tag {tag} does not match package version {expected}')"
+          python -c "import os, pathlib, sys, tomllib; version = tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version']; tag = os.environ['GITHUB_REF_NAME']; expected = f'v{version}'; print(f'Checking release build for {expected}') if tag == expected else sys.exit(f'release tag {tag} does not match package version {expected}')"
 
       - run: pip install build
       - run: python -m build
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
