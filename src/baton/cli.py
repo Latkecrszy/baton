@@ -1721,13 +1721,12 @@ async def _cmd_status_remote(args: argparse.Namespace) -> int:
     if ":" in remote:
         remote_host, _, port_str = remote.rpartition(":")
         try:
-            port_override: int | None = int(port_str)
+            int(port_str)  # validate but don't use — each node has its own management port
         except ValueError:
             print(f"Error: invalid port in --remote '{remote}'", file=sys.stderr)
             return 1
     else:
         remote_host = remote
-        port_override = None
 
     print(f"Circuit: {circuit.name} (v{circuit.version}) — remote {remote_host}")
     print(f"Nodes:   {len(circuit.nodes)}")
@@ -1738,7 +1737,7 @@ async def _cmd_status_remote(args: argparse.Namespace) -> int:
 
     rc = 0
     for n in circuit.nodes:
-        mgmt_port = port_override if port_override is not None else n.management_port
+        mgmt_port = n.management_port
         role = f"[{n.role}]" if n.role != "service" else ""
         try:
             status, body = await asyncio.wait_for(
